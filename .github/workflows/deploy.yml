@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -30,10 +31,13 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       - name: Build
-        run: pnpm build
+        run: pnpm run build
+
+      - name: Copy index.html to 404.html for SPA routing
+        run: cp dist/index.html dist/404.html
 
       - uses: actions/upload-pages-artifact@v3
         with:
