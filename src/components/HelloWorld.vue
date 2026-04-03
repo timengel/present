@@ -389,6 +389,42 @@ const playTttDefeatCrowdSadSound = async () => {
   }
 }
 
+const playTrumpetFanfare = async () => {
+  try {
+    const context = await getAudioContext()
+    const now = context.currentTime
+
+    const notes = [392, 523.25, 659.25, 783.99]
+    notes.forEach((freq, i) => {
+      const start = now + i * 0.11
+      const dur = 0.2
+
+      const osc = context.createOscillator()
+      const gain = context.createGain()
+      const bright = context.createBiquadFilter()
+      bright.type = 'highshelf'
+      bright.frequency.value = 1600
+      bright.gain.value = 4
+
+      osc.type = 'square'
+      osc.frequency.setValueAtTime(freq, start)
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.02, start + dur)
+
+      gain.gain.setValueAtTime(0.0001, start)
+      gain.gain.exponentialRampToValueAtTime(0.12, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + dur)
+
+      osc.connect(gain)
+      gain.connect(bright)
+      bright.connect(context.destination)
+      osc.start(start)
+      osc.stop(start + dur + 0.02)
+    })
+  } catch {
+    // Intentionally ignore audio playback failures.
+  }
+}
+
 const triggerRpsRoundFlash = (flash: RpsFlash) => {
   stopRpsFlashTimer()
   rpsRoundFlash.value = flash
@@ -839,6 +875,7 @@ const animateConfetti = () => {
 
 const startCelebration = () => {
   stage.value = 'celebration'
+  void playTrumpetFanfare()
   resizeCanvas()
   spawnParticles()
   animateConfetti()
