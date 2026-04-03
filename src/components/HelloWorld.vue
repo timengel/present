@@ -1171,15 +1171,17 @@ onBeforeUnmount(() => {
         <path d="M210 66 C201 78 202 87 210 91 C218 87 219 78 210 66" fill="#fff06a" />
       </svg>
 
-      <p class="voucher-text">Gutschein für ein Brettspiel deiner Wahl, kuratiert von Tim :)</p>
+      <div class="voucher-row">
+        <p class="voucher-text">Gutschein für ein Brettspiel deiner Wahl, kuratiert von Tim :)</p>
 
-      <div class="game-carousel">
-        <img
-          :key="gameImageIndex"
-          :src="gameImages[gameImageIndex]"
-          class="carousel-img"
-          alt="Brettspiel"
-        />
+        <div class="game-carousel">
+          <img
+            :key="gameImageIndex"
+            :src="gameImages[gameImageIndex]"
+            class="carousel-img"
+            alt="Brettspiel"
+          />
+        </div>
       </div>
     </section>
 
@@ -1789,20 +1791,28 @@ onBeforeUnmount(() => {
   }
 }
 
+.voucher-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 22px;
+}
+
 .voucher-text {
-  margin-bottom: 20px;
-  text-align: center;
+  margin: 0;
+  text-align: left;
   font-size: clamp(1rem, 1.8vw, 1.25rem);
   color: rgba(255, 255, 255, 0.9);
   letter-spacing: 0.02em;
-  max-width: 34ch;
+  max-width: 24ch;
   line-height: 1.5;
 }
 
 .game-carousel {
-  width: min(160px, 44vw);
-  aspect-ratio: 1 / 1;
-  border-radius: 20px;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+  border-radius: 14px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.2);
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
