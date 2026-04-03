@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watchEffect } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-type Stage = 'start' | 'typing' | 'game' | 'celebration'
+type Stage = 'start' | 'typing' | 'game' | 'rps' | 'celebration'
 type CellValue = '' | 'X' | 'O'
+type RpsChoice = 'rock' | 'paper' | 'scissors'
+type RpsOutcome = 'user' | 'computer' | 'draw'
+type RpsFlash = 'none' | 'win' | 'lose'
 
 type ConfettiParticle = {
   x: number
@@ -19,27 +22,52 @@ type ConfettiParticle = {
 }
 
 const fullText =
-  'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent commodo eros in lectus tincidunt, sit amet condimentum est tincidunt. Vestibulum non nisi eu lacus dignissim facilisis, id luctus nibh luctus.'
+  'Alles Gute zum Geburtstag, Janalein! ❤️\nLeider hat ein böser Computer dein Geschenk geklaut... Besiege ihn in mindestens einmal in den folgenden Spielen, um es zurückzuholen!'
 const typingDelayMs = 68
 const isDevMode = new URLSearchParams(window.location.search).get('dev')?.toLowerCase() === 'true'
 
 const totalGames = 3
 const requiredWins = 1
+const tttLossTarget = 3
+const effectiveTttLossTarget = isDevMode ? 1 : tttLossTarget
 
 const stage = ref<Stage>('start')
 const typedText = ref('')
 const isTypingDone = ref(false)
 
-const currentPoints = ref(0)
 const currentGame = ref(1)
+const tttLosses = ref(0)
+const showTttDefeatModal = ref(false)
+const showRpsWinModal = ref(false)
 
 const board = ref<CellValue[]>(Array(9).fill(''))
 const gameOver = ref(false)
 const computerThinking = ref(false)
-const gameMessage = ref('Your turn. You are X.')
+const gameMessage = ref('Dein Zug.')
 const animatedCells = ref<number[]>([])
 const showSadFace = ref(false)
 const showIllegalAction = ref(false)
+
+const rpsChoices: RpsChoice[] = ['rock', 'paper', 'scissors']
+const rpsChoiceLabels: Record<RpsChoice, string> = {
+  rock: 'Stein',
+  paper: 'Papier',
+  scissors: 'Schere',
+}
+const rpsChoiceIcons: Record<RpsChoice, string> = {
+  rock: '🪨',
+  paper: '📄',
+  scissors: '✂️',
+}
+const rpsUserWins = ref(0)
+const rpsComputerWins = ref(0)
+const rpsDraws = ref(0)
+const rpsThinking = ref(false)
+const rpsThinkingStep = ref(0)
+const rpsMessage = ref('Wähle Stein, Papier oder Schere.')
+const rpsUserChoice = ref<RpsChoice | null>(null)
+const rpsComputerChoice = ref<RpsChoice | null>(null)
+const rpsRoundFlash = ref<RpsFlash>('none')
 
 const confettiCanvas = ref<HTMLCanvasElement | null>(null)
 
@@ -62,6 +90,10 @@ let textIndex = 0
 let computerMoveTimer: number | null = null
 let animationClearTimer: number | null = null
 let illegalActionTimer: number | null = null
+let rpsThinkingInterval: number | null = null
+let rpsRevealTimer: number | null = null
+let rpsFlashTimer: number | null = null
+let tttDefeatModalTimer: number | null = null
 let audioContext: AudioContext | null = null
 
 let animationFrameId: number | null = null
@@ -122,6 +154,31 @@ const stopIllegalActionTimer = () => {
   if (illegalActionTimer !== null) {
     window.clearTimeout(illegalActionTimer)
     illegalActionTimer = null
+  }
+}
+
+const stopRpsTimers = () => {
+  if (rpsThinkingInterval !== null) {
+    window.clearInterval(rpsThinkingInterval)
+    rpsThinkingInterval = null
+  }
+  if (rpsRevealTimer !== null) {
+    window.clearTimeout(rpsRevealTimer)
+    rpsRevealTimer = null
+  }
+}
+
+const stopRpsFlashTimer = () => {
+  if (rpsFlashTimer !== null) {
+    window.clearTimeout(rpsFlashTimer)
+    rpsFlashTimer = null
+  }
+}
+
+const stopTttDefeatModalTimer = () => {
+  if (tttDefeatModalTimer !== null) {
+    window.clearTimeout(tttDefeatModalTimer)
+    tttDefeatModalTimer = null
   }
 }
 
@@ -196,6 +253,154 @@ const playIllegalActionSound = async () => {
   }
 }
 
+const playRpsWinSound = async () => {
+  try {
+    const context = await getAudioContext()
+    const now = context.currentTime
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+
+    oscillator.type = 'sine'
+    oscillator.frequency.setValueAtTime(420, now)
+    oscillator.frequency.exponentialRampToValueAtTime(780, now + 0.2)
+
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24)
+
+    oscillator.connect(gain)
+    gain.connect(context.destination)
+    oscillator.start(now)
+    oscillator.stop(now + 0.26)
+  } catch {
+    // Intentionally ignore audio playback failures.
+  }
+}
+
+const playRpsLoseSound = async () => {
+  try {
+    const context = await getAudioContext()
+    const now = context.currentTime
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+
+    oscillator.type = 'triangle'
+    oscillator.frequency.setValueAtTime(580, now)
+    oscillator.frequency.exponentialRampToValueAtTime(210, now + 0.25)
+
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28)
+
+    oscillator.connect(gain)
+    gain.connect(context.destination)
+    oscillator.start(now)
+    oscillator.stop(now + 0.3)
+  } catch {
+    // Intentionally ignore audio playback failures.
+  }
+}
+
+const playRpsVictoryCheer = async () => {
+  try {
+    const context = await getAudioContext()
+    const now = context.currentTime
+
+    // Cheer-like rising tone.
+    const cheerOsc = context.createOscillator()
+    const cheerGain = context.createGain()
+    cheerOsc.type = 'sawtooth'
+    cheerOsc.frequency.setValueAtTime(320, now)
+    cheerOsc.frequency.exponentialRampToValueAtTime(760, now + 0.42)
+    cheerGain.gain.setValueAtTime(0.0001, now)
+    cheerGain.gain.exponentialRampToValueAtTime(0.09, now + 0.04)
+    cheerGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.46)
+    cheerOsc.connect(cheerGain)
+    cheerGain.connect(context.destination)
+    cheerOsc.start(now)
+    cheerOsc.stop(now + 0.48)
+
+    // Short clap-like noise bursts.
+    const burstDur = 0.05
+    const clapTimes = [0.08, 0.18, 0.28, 0.38, 0.5]
+    for (const offset of clapTimes) {
+      const start = now + offset
+      const frameCount = Math.floor(context.sampleRate * burstDur)
+      const buffer = context.createBuffer(1, frameCount, context.sampleRate)
+      const data = buffer.getChannelData(0)
+      for (let i = 0; i < frameCount; i += 1) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / frameCount)
+      }
+
+      const noise = context.createBufferSource()
+      const noiseGain = context.createGain()
+      noise.buffer = buffer
+      noiseGain.gain.setValueAtTime(0.0001, start)
+      noiseGain.gain.exponentialRampToValueAtTime(0.1, start + 0.005)
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, start + burstDur)
+      noise.connect(noiseGain)
+      noiseGain.connect(context.destination)
+      noise.start(start)
+      noise.stop(start + burstDur)
+    }
+  } catch {
+    // Intentionally ignore audio playback failures.
+  }
+}
+
+const playTttDefeatCrowdSadSound = async () => {
+  try {
+    const context = await getAudioContext()
+    const now = context.currentTime
+
+    // Low "crowd sadness" bed.
+    const crowdOsc = context.createOscillator()
+    const crowdGain = context.createGain()
+    crowdOsc.type = 'sawtooth'
+    crowdOsc.frequency.setValueAtTime(180, now)
+    crowdOsc.frequency.exponentialRampToValueAtTime(120, now + 0.7)
+    crowdGain.gain.setValueAtTime(0.0001, now)
+    crowdGain.gain.exponentialRampToValueAtTime(0.07, now + 0.05)
+    crowdGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.75)
+    crowdOsc.connect(crowdGain)
+    crowdGain.connect(context.destination)
+    crowdOsc.start(now)
+    crowdOsc.stop(now + 0.78)
+
+    // A few soft descending "ohhh" tones.
+    const offsets = [0.08, 0.22, 0.36]
+    for (const offset of offsets) {
+      const start = now + offset
+      const osc = context.createOscillator()
+      const gain = context.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(320, start)
+      osc.frequency.exponentialRampToValueAtTime(210, start + 0.24)
+      gain.gain.setValueAtTime(0.0001, start)
+      gain.gain.exponentialRampToValueAtTime(0.045, start + 0.03)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.26)
+      osc.connect(gain)
+      gain.connect(context.destination)
+      osc.start(start)
+      osc.stop(start + 0.27)
+    }
+  } catch {
+    // Intentionally ignore audio playback failures.
+  }
+}
+
+const triggerRpsRoundFlash = (flash: RpsFlash) => {
+  stopRpsFlashTimer()
+  rpsRoundFlash.value = flash
+  if (flash === 'none') {
+    return
+  }
+  rpsFlashTimer = window.setTimeout(() => {
+    rpsRoundFlash.value = 'none'
+    rpsFlashTimer = null
+  }, 620)
+}
+
 const showIllegalActionFeedback = () => {
   stopIllegalActionTimer()
   showIllegalAction.value = true
@@ -213,6 +418,15 @@ const handleLoss = (message: string) => {
   showSadFace.value = true
   void playLossSound()
   currentGame.value = Math.min(currentGame.value + 1, totalGames)
+  tttLosses.value = Math.min(tttLosses.value + 1, effectiveTttLossTarget)
+  if (tttLosses.value >= effectiveTttLossTarget) {
+    stopTttDefeatModalTimer()
+    tttDefeatModalTimer = window.setTimeout(() => {
+      showTttDefeatModal.value = true
+      void playTttDefeatCrowdSadSound()
+      tttDefeatModalTimer = null
+    }, 1800)
+  }
 }
 
 const resetGame = () => {
@@ -221,7 +435,7 @@ const resetGame = () => {
   board.value = Array(9).fill('')
   gameOver.value = false
   computerThinking.value = false
-  gameMessage.value = 'Your turn. You are X.'
+  gameMessage.value = 'Du bist dran. Du bist X.'
   animatedCells.value = []
   showSadFace.value = false
   showIllegalAction.value = false
@@ -233,7 +447,98 @@ const openGamesStage = () => {
   }
 
   stage.value = 'game'
+  tttLosses.value = 0
+  showTttDefeatModal.value = false
+  showRpsWinModal.value = false
+  stopTttDefeatModalTimer()
+  currentGame.value = 1
   resetGame()
+}
+
+const continueAfterTttDefeat = () => {
+  stopTttDefeatModalTimer()
+  showTttDefeatModal.value = false
+  stage.value = 'rps'
+  rpsUserWins.value = 0
+  rpsComputerWins.value = 0
+  rpsDraws.value = 0
+  rpsThinking.value = false
+  rpsThinkingStep.value = 0
+  rpsUserChoice.value = null
+  rpsComputerChoice.value = null
+  rpsMessage.value = 'Wähle Stein, Papier oder Schere.'
+  rpsRoundFlash.value = 'none'
+  stopRpsFlashTimer()
+}
+
+const rpsOutcomePools = (computerWins: number): RpsOutcome[] =>
+  computerWins < 2 ? ['draw', 'computer'] : ['draw', 'user']
+
+const pickComputerChoice = (userChoice: RpsChoice, outcome: RpsOutcome): RpsChoice => {
+  if (outcome === 'draw') {
+    return userChoice
+  }
+  if (outcome === 'computer') {
+    if (userChoice === 'rock') return 'paper'
+    if (userChoice === 'paper') return 'scissors'
+    return 'rock'
+  }
+  if (userChoice === 'rock') return 'scissors'
+  if (userChoice === 'paper') return 'rock'
+  return 'paper'
+}
+
+const onRpsChoice = (choice: RpsChoice) => {
+  if (stage.value !== 'rps' || rpsThinking.value || showRpsWinModal.value) {
+    return
+  }
+
+  rpsUserChoice.value = choice
+  rpsComputerChoice.value = null
+  rpsMessage.value = 'Computer denkt nach...'
+  rpsThinking.value = true
+  rpsThinkingStep.value = 0
+  stopRpsTimers()
+
+  rpsThinkingInterval = window.setInterval(() => {
+    rpsThinkingStep.value = (rpsThinkingStep.value + 1) % rpsChoices.length
+  }, 130)
+
+  rpsRevealTimer = window.setTimeout(() => {
+    stopRpsTimers()
+    const pool = rpsOutcomePools(rpsComputerWins.value)
+    const outcome = pool[Math.floor(Math.random() * pool.length)]
+    const computerChoice = pickComputerChoice(choice, outcome)
+    rpsComputerChoice.value = computerChoice
+
+    if (outcome === 'user') {
+      rpsUserWins.value += 1
+      rpsMessage.value = `Du gewinnst diese Runde! (${rpsChoiceLabels[choice]} schlägt ${rpsChoiceLabels[computerChoice]})`
+      triggerRpsRoundFlash('win')
+      void playRpsWinSound()
+    } else if (outcome === 'computer') {
+      rpsComputerWins.value += 1
+      rpsMessage.value = `Computer gewinnt diese Runde. (${rpsChoiceLabels[computerChoice]} schlägt ${rpsChoiceLabels[choice]})`
+      triggerRpsRoundFlash('lose')
+      void playRpsLoseSound()
+    } else {
+      rpsDraws.value += 1
+      rpsMessage.value = `Unentschieden. Beide haben ${rpsChoiceLabels[choice]} gewählt.`
+      triggerRpsRoundFlash('none')
+    }
+
+    if (rpsUserWins.value >= 3) {
+      showRpsWinModal.value = true
+      void playRpsVictoryCheer()
+    }
+
+    rpsThinking.value = false
+  }, 980)
+}
+
+const openGiftFromRps = () => {
+  showRpsWinModal.value = false
+  startCelebration()
 }
 
 const findWinningLine = (cells: CellValue[], marker: 'X' | 'O') => {
@@ -301,7 +606,7 @@ const forceComputerImmediateWin = () => {
 
   board.value = next
   animateCells(bestLine)
-  handleLoss('Computer won this round.')
+  handleLoss('Computer gewinnt diese Runde.')
 }
 
 const findSetupMoveIndex = (cells: CellValue[]) => {
@@ -362,12 +667,18 @@ const makeCheatingWin = () => {
 
   board.value = next
   animateCells([singleFlipWin.indexToFlip, ...computerLine])
-  handleLoss('You were close. Computer wins this round.')
+  handleLoss('Knapp daneben. Computer gewinnt diese Runde.')
   return true
 }
 
 const onCellClick = (index: number) => {
-  if (stage.value !== 'game' || gameOver.value || computerThinking.value || board.value[index] !== '') {
+  if (
+    stage.value !== 'game' ||
+    showTttDefeatModal.value ||
+    gameOver.value ||
+    computerThinking.value ||
+    board.value[index] !== ''
+  ) {
     return
   }
 
@@ -385,7 +696,7 @@ const onCellClick = (index: number) => {
   board.value[index] = 'X'
   animateCells([index])
 
-  gameMessage.value = 'Computer is thinking...'
+  gameMessage.value = 'Computer denkt nach...'
   computerThinking.value = true
 
   computerMoveTimer = window.setTimeout(() => {
@@ -404,7 +715,7 @@ const onCellClick = (index: number) => {
     const computerLine = findWinningLine(board.value, 'O')
     if (computerLine) {
       animateCells(computerLine)
-      handleLoss('Computer won this round.')
+      handleLoss('Computer gewinnt diese Runde.')
       computerThinking.value = false
       return
     }
@@ -412,7 +723,7 @@ const onCellClick = (index: number) => {
     const hasEmptyCells = board.value.some((value) => value === '')
     if (!hasEmptyCells) {
       gameOver.value = true
-      gameMessage.value = 'Draw. Try again.'
+      gameMessage.value = 'Unentschieden. Bitte noch einmal.'
       currentGame.value = Math.min(currentGame.value + 1, totalGames)
       computerThinking.value = false
       return
@@ -424,7 +735,7 @@ const onCellClick = (index: number) => {
       return
     }
 
-    gameMessage.value = 'Your turn. You are X.'
+    gameMessage.value = 'Dein Zug.'
     computerThinking.value = false
   }, 620)
 }
@@ -537,12 +848,6 @@ const startCelebration = () => {
   }, 3600)
 }
 
-watchEffect(() => {
-  if (stage.value === 'game' && currentPoints.value >= requiredWins) {
-    startCelebration()
-  }
-})
-
 onMounted(() => {
   window.addEventListener('resize', resizeCanvas)
 })
@@ -552,6 +857,9 @@ onBeforeUnmount(() => {
   stopComputerMoveTimer()
   stopAnimationClearTimer()
   stopIllegalActionTimer()
+  stopRpsTimers()
+  stopRpsFlashTimer()
+  stopTttDefeatModalTimer()
   stopConfetti()
   window.removeEventListener('resize', resizeCanvas)
   if (audioContext) {
@@ -583,17 +891,17 @@ onBeforeUnmount(() => {
         @click="openGamesStage"
         @touchstart.passive="openGamesStage"
       >
-        Proceed
+        Weiter
       </button>
     </section>
 
-    <section v-else-if="stage === 'game'" class="game-stage" aria-label="Mini game challenge">
+    <section v-else-if="stage === 'game'" class="game-stage" aria-label="Mini-Spiel-Herausforderung">
       <div class="game-layout">
         <article class="game-card">
           <h2>Tic-Tac-Toe</h2>
           <p class="game-message">{{ gameMessage }}</p>
 
-          <div class="board" role="grid" aria-label="Tic tac toe board">
+          <div class="board" role="grid" aria-label="Tic-Tac-Toe Spielfeld">
             <button
               v-for="(cell, index) in board"
               :key="index"
@@ -612,35 +920,92 @@ onBeforeUnmount(() => {
             <p class="illegal-action" :class="{ 'illegal-action-visible': showIllegalAction }">Illegale Aktion</p>
             <button
               class="retry-button"
-              :class="{ 'retry-button-visible': gameOver }"
+              :class="{ 'retry-button-visible': gameOver && tttLosses < effectiveTttLossTarget && !showTttDefeatModal }"
               type="button"
-              :disabled="!gameOver"
-              :aria-hidden="!gameOver"
+              :disabled="!gameOver || showTttDefeatModal || tttLosses >= effectiveTttLossTarget"
+              :aria-hidden="!gameOver || showTttDefeatModal || tttLosses >= effectiveTttLossTarget"
               @click="resetGame"
             >
-              Try Again
+              Erneut versuchen
             </button>
           </div>
         </article>
 
-        <aside class="score-card" aria-label="Scoreboard">
-          <h3>Score</h3>
-          <p><span>Current points</span><strong>{{ currentPoints }}</strong></p>
-          <p><span>Games</span><strong>{{ totalGames }}</strong></p>
-          <p><span>Required wins</span><strong>{{ requiredWins }}</strong></p>
-          <p><span>Current game</span><strong>{{ currentGame }} / {{ totalGames }}</strong></p>
-          <small>You need wins to unlock the present. This is game 1.</small>
+        <aside class="score-card" aria-label="Punktestand">
+          <h3>Punktestand</h3>
+          <p><span>Spiele</span><strong>{{ totalGames }}</strong></p>
+          <p><span>Benötigte Siege</span><strong>{{ requiredWins }}</strong></p>
+          <p><span>Spiel</span><strong>{{ currentGame }} / {{ totalGames }}</strong></p>
+          <small>Du brauchst nur 1 Sieg um dein Geschenk zu retten! Du hast 3 Versuche.</small>
         </aside>
       </div>
     </section>
 
-    <section v-else class="cake-stage" aria-label="Birthday cake celebration">
+    <section v-else-if="stage === 'rps'" class="game-stage" aria-label="Schere Stein Papier Herausforderung">
+      <div class="game-layout">
+        <article class="game-card rps-card">
+          <h2>Schere Stein Papier</h2>
+          <p class="game-message">{{ rpsMessage }}</p>
+
+          <div class="rps-choice-grid" role="group" aria-label="Schere Stein Papier Auswahl">
+            <button
+              v-for="choice in rpsChoices"
+              :key="choice"
+              class="choice-button"
+              type="button"
+              :aria-label="rpsChoiceLabels[choice]"
+              :disabled="rpsThinking || showRpsWinModal"
+              @click="onRpsChoice(choice)"
+            >
+              <span class="choice-icon" aria-hidden="true">{{ rpsChoiceIcons[choice] }}</span>
+            </button>
+          </div>
+
+          <div
+            class="rps-live-score"
+            :class="{ 'rps-live-score-win': rpsRoundFlash === 'win', 'rps-live-score-lose': rpsRoundFlash === 'lose' }"
+            aria-label="Aktueller Spielstand"
+          >
+            <span class="live-team">Du</span>
+            <strong class="live-score">{{ rpsUserWins }} : {{ rpsComputerWins }}</strong>
+            <span class="live-team">Computer</span>
+          </div>
+
+          <div class="rps-duel" aria-live="polite">
+            <div class="duel-side">
+              <span class="duel-name">Du</span>
+              <strong class="duel-icon" aria-label="Deine Wahl">
+                {{ rpsUserChoice ? rpsChoiceIcons[rpsUserChoice] : '◌' }}
+              </strong>
+            </div>
+            <span class="duel-vs">gegen</span>
+            <div class="duel-side">
+              <span class="duel-name">Computer</span>
+              <strong class="duel-icon" aria-label="Computer Wahl">
+                {{ rpsThinking ? rpsChoiceIcons[rpsChoices[rpsThinkingStep]] : rpsComputerChoice ? rpsChoiceIcons[rpsComputerChoice] : '◌' }}
+              </strong>
+            </div>
+          </div>
+        </article>
+
+        <aside class="score-card" aria-label="RPS Punktestand">
+          <h3>Punktestand</h3>
+          <p><span>Spiel</span><strong>RPS</strong></p>
+          <p><span>Deine Siege</span><strong>{{ rpsUserWins }} / 3</strong></p>
+          <p><span>Computer</span><strong>{{ rpsComputerWins }}</strong></p>
+          <p><span>Unentschieden</span><strong>{{ rpsDraws }}</strong></p>
+          <small>Erreiche 3 Siege, um dein Geschenk zu öffnen.</small>
+        </aside>
+      </div>
+    </section>
+
+    <section v-else class="cake-stage" aria-label="Geburtstagskuchen Feier">
       <svg
         class="cake-svg"
         viewBox="0 0 420 420"
         xmlns="http://www.w3.org/2000/svg"
         role="img"
-        aria-label="Birthday cake"
+        aria-label="Geburtstagskuchen"
       >
         <defs>
           <linearGradient id="cakeBody" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -670,6 +1035,20 @@ onBeforeUnmount(() => {
         <path d="M210 66 C201 78 202 87 210 91 C218 87 219 78 210 66" fill="#fff06a" />
       </svg>
     </section>
+
+    <div v-if="showTttDefeatModal" class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal-jumbotron">
+        <h3>Schade, verloren. Probiere dein Glück beim nächsten Spiel!</h3>
+        <button class="modal-button" type="button" @click="continueAfterTttDefeat">Weiter</button>
+      </div>
+    </div>
+
+    <div v-if="showRpsWinModal" class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal-jumbotron">
+        <h3>Mega! Ein verdienter Sieg! Öffne jetzt dein Geschenk!</h3>
+        <button class="modal-button" type="button" @click="openGiftFromRps">Öffnen</button>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -705,6 +1084,7 @@ onBeforeUnmount(() => {
   line-height: 1.65;
   letter-spacing: 0.01em;
   max-width: 34ch;
+  white-space: pre-line;
 }
 
 .cursor {
@@ -868,6 +1248,171 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
+.rps-card {
+  gap: 14px;
+}
+
+.rps-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.choice-button {
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  border-radius: 12px;
+  aspect-ratio: 1 / 1;
+  min-height: 62px;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+  display: grid;
+  place-items: center;
+}
+
+.choice-button:hover,
+.choice-button:focus-visible {
+  border-color: #fff;
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.choice-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.choice-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.rps-live-score {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+}
+
+.rps-live-score-win {
+  animation: rps-win-flash 0.62s ease-out;
+}
+
+.rps-live-score-lose {
+  animation: rps-lose-flash 0.62s ease-out;
+}
+
+.live-team {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.live-team:last-child {
+  text-align: right;
+}
+
+.live-score {
+  font-size: 1.25rem;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.rps-duel {
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  margin-top: 4px;
+  padding-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.duel-side {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
+.duel-name {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.duel-icon {
+  font-size: 2.3rem;
+  line-height: 1;
+}
+
+.duel-vs {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.65);
+  text-transform: uppercase;
+}
+
+.rps-result p {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: rgba(0, 0, 0, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal-jumbotron {
+  width: min(460px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 24px;
+  background: linear-gradient(140deg, rgba(92, 92, 92, 0.4), rgba(52, 52, 52, 0.8));
+  padding: clamp(24px, 3.6vw, 40px);
+  text-align: center;
+  box-shadow: 0 24px 50px rgba(0, 0, 0, 0.45);
+}
+
+.modal-jumbotron h3 {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.2vw, 2rem);
+  line-height: 1.4;
+}
+
+.modal-button {
+  margin-top: 24px;
+  padding: 14px 28px;
+  border-radius: 999px;
+  border: 1px solid #fff;
+  background: transparent;
+  color: #fff;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.modal-button:hover,
+.modal-button:focus-visible {
+  background: #fff;
+  color: #000;
+  transform: translateY(-1px);
+  outline: none;
+}
+
 .score-card {
   width: 278px;
   min-width: 278px;
@@ -958,6 +1503,42 @@ onBeforeUnmount(() => {
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes rps-win-flash {
+  0% {
+    background: rgba(103, 255, 151, 0.5);
+    border-color: rgba(103, 255, 151, 0.95);
+    box-shadow: 0 0 0 rgba(103, 255, 151, 0);
+  }
+  45% {
+    background: rgba(103, 255, 151, 0.24);
+    border-color: rgba(103, 255, 151, 0.7);
+    box-shadow: 0 0 26px rgba(103, 255, 151, 0.4);
+  }
+  100% {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 rgba(103, 255, 151, 0);
+  }
+}
+
+@keyframes rps-lose-flash {
+  0% {
+    background: rgba(255, 109, 109, 0.5);
+    border-color: rgba(255, 109, 109, 0.95);
+    box-shadow: 0 0 0 rgba(255, 109, 109, 0);
+  }
+  45% {
+    background: rgba(255, 109, 109, 0.24);
+    border-color: rgba(255, 109, 109, 0.7);
+    box-shadow: 0 0 26px rgba(255, 109, 109, 0.4);
+  }
+  100% {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 0 0 rgba(255, 109, 109, 0);
   }
 }
 
