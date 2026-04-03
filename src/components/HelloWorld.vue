@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import game1 from '../assets/game1.webp'
+import game2 from '../assets/game2.webp'
+import game3 from '../assets/game3.webp'
+import game4 from '../assets/game4.webp'
+import game5 from '../assets/game5.webp'
+import game6 from '../assets/game6.webp'
+import game7 from '../assets/game7.webp'
 
 type Stage = 'start' | 'typing' | 'game' | 'rps' | 'celebration'
 type CellValue = '' | 'X' | 'O'
@@ -19,11 +26,14 @@ type ConfettiParticle = {
   vy: number
   gravity: number
   alpha: number
+  kind: 'burst' | 'ambient'
+  driftPhase: number
+  driftSpeed: number
 }
 
 const fullText =
-  'Alles Gute zum Geburtstag, Janalein! ❤️\nLeider hat ein böser Computer dein Geschenk geklaut... Besiege ihn in mindestens einmal in den folgenden Spielen, um es zurückzuholen!'
-const typingDelayMs = 68
+  'Alles Gute zum Geburtstag, Janalein! ❤️\nLeider hat ein böser Computer dein Geschenk geklaut... Besiege ihn mindestens einmal in den folgenden Spielen, um es zurückzuholen!'
+const typingDelayMs = 85
 const isDevMode = new URLSearchParams(window.location.search).get('dev')?.toLowerCase() === 'true'
 
 const totalGames = 3
@@ -62,6 +72,7 @@ const rpsChoiceIcons: Record<RpsChoice, string> = {
 const rpsUserWins = ref(0)
 const rpsComputerWins = ref(0)
 const rpsDraws = ref(0)
+const rpsRoundCount = ref(0)
 const rpsThinking = ref(false)
 const rpsThinkingStep = ref(0)
 const rpsMessage = ref('Wähle Stein, Papier oder Schere.')
@@ -70,6 +81,9 @@ const rpsComputerChoice = ref<RpsChoice | null>(null)
 const rpsRoundFlash = ref<RpsFlash>('none')
 
 const confettiCanvas = ref<HTMLCanvasElement | null>(null)
+
+const gameImages = [game1, game2, game3, game4, game5, game6, game7]
+const gameImageIndex = ref(0)
 
 const winningLines: number[][] = [
   [0, 1, 2],
@@ -96,9 +110,11 @@ let rpsFlashTimer: number | null = null
 let tttDefeatModalTimer: number | null = null
 let audioContext: AudioContext | null = null
 
+let imageCarouselTimer: number | null = null
 let animationFrameId: number | null = null
-let cleanupTimerId: number | null = null
 let particles: ConfettiParticle[] = []
+let ambientConfettiActive = false
+let lastAmbientSpawnAt = 0
 
 const stopTyping = () => {
   if (typingTimer !== null) {
@@ -179,6 +195,13 @@ const stopTttDefeatModalTimer = () => {
   if (tttDefeatModalTimer !== null) {
     window.clearTimeout(tttDefeatModalTimer)
     tttDefeatModalTimer = null
+  }
+}
+
+const stopImageCarousel = () => {
+  if (imageCarouselTimer !== null) {
+    window.clearInterval(imageCarouselTimer)
+    imageCarouselTimer = null
   }
 }
 
@@ -498,6 +521,7 @@ const continueAfterTttDefeat = () => {
   rpsUserWins.value = 0
   rpsComputerWins.value = 0
   rpsDraws.value = 0
+  rpsRoundCount.value = 0
   rpsThinking.value = false
   rpsThinkingStep.value = 0
   rpsUserChoice.value = null
@@ -542,12 +566,19 @@ const onRpsChoice = (choice: RpsChoice) => {
 
   rpsRevealTimer = window.setTimeout(() => {
     stopRpsTimers()
+    rpsRoundCount.value += 1
     const pool = rpsOutcomePools(rpsComputerWins.value)
-    const outcome = pool[Math.floor(Math.random() * pool.length)]
+    const devSkipWin = isDevMode && rpsRoundCount.value === 1
+    const outcome: RpsOutcome = devSkipWin ? 'user' : pool[Math.floor(Math.random() * pool.length)]
     const computerChoice = pickComputerChoice(choice, outcome)
     rpsComputerChoice.value = computerChoice
 
-    if (outcome === 'user') {
+    if (devSkipWin) {
+      rpsUserWins.value = 3
+      rpsMessage.value = `Dev-Shortcut aktiv: RPS direkt gewonnen! (${rpsChoiceLabels[choice]} schlägt ${rpsChoiceLabels[computerChoice]})`
+      triggerRpsRoundFlash('win')
+      void playRpsWinSound()
+    } else if (outcome === 'user') {
       rpsUserWins.value += 1
       rpsMessage.value = `Du gewinnst diese Runde! (${rpsChoiceLabels[choice]} schlägt ${rpsChoiceLabels[computerChoice]})`
       triggerRpsRoundFlash('win')
@@ -811,7 +842,34 @@ const spawnParticles = () => {
       vy: Math.sin(angle) * speed - (6 + Math.random() * 6),
       gravity: 0.16 + Math.random() * 0.12,
       alpha: 1,
+      kind: 'burst',
+      driftPhase: Math.random() * Math.PI * 2,
+      driftSpeed: 0.06 + Math.random() * 0.05,
     }
+  })
+}
+
+const spawnAmbientConfettiParticle = () => {
+  const canvas = confettiCanvas.value
+  if (!canvas) {
+    return
+  }
+
+  particles.push({
+    x: Math.random() * canvas.width,
+    y: -24 - Math.random() * 40,
+    width: 7 + Math.random() * 9,
+    height: 10 + Math.random() * 12,
+    color: confettiColors[Math.floor(Math.random() * confettiColors.length)],
+    rotation: Math.random() * Math.PI,
+    rotationSpeed: (Math.random() - 0.5) * 0.1,
+    vx: (Math.random() - 0.5) * 0.35,
+    vy: 0.6 + Math.random() * 0.8,
+    gravity: 0.008 + Math.random() * 0.01,
+    alpha: 0.85 + Math.random() * 0.15,
+    kind: 'ambient',
+    driftPhase: Math.random() * Math.PI * 2,
+    driftSpeed: 0.028 + Math.random() * 0.024,
   })
 }
 
@@ -821,12 +879,9 @@ const stopConfetti = () => {
     animationFrameId = null
   }
 
-  if (cleanupTimerId !== null) {
-    window.clearTimeout(cleanupTimerId)
-    cleanupTimerId = null
-  }
-
   particles = []
+  ambientConfettiActive = false
+  lastAmbientSpawnAt = 0
 
   const canvas = confettiCanvas.value
   if (!canvas) {
@@ -848,16 +903,39 @@ const animateConfetti = () => {
     return
   }
 
+  const now = performance.now()
+  if (ambientConfettiActive) {
+    const spawnInterval = 220
+    if (now - lastAmbientSpawnAt >= spawnInterval) {
+      spawnAmbientConfettiParticle()
+      if (Math.random() < 0.4) {
+        spawnAmbientConfettiParticle()
+      }
+      lastAmbientSpawnAt = now
+    }
+  }
+
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-  particles = particles.filter((particle) => particle.alpha > 0)
+  particles = particles.filter((particle) => {
+    if (particle.kind === 'burst') {
+      return particle.alpha > 0 && particle.y < canvas.height + 120
+    }
+    return particle.y < canvas.height + 70 && particle.x > -120 && particle.x < canvas.width + 120
+  })
 
   for (const particle of particles) {
     particle.vy += particle.gravity
-    particle.x += particle.vx
+    particle.driftPhase += particle.driftSpeed
+    const driftX = Math.sin(particle.driftPhase) * (particle.kind === 'ambient' ? 0.55 : 0.2)
+    particle.x += particle.vx + driftX
     particle.y += particle.vy
     particle.rotation += particle.rotationSpeed
-    particle.alpha -= 0.004
+    if (particle.kind === 'burst') {
+      particle.alpha -= 0.004
+    } else {
+      particle.alpha = Math.max(0.38, particle.alpha - 0.0004)
+    }
 
     ctx.save()
     ctx.globalAlpha = Math.max(particle.alpha, 0)
@@ -868,7 +946,7 @@ const animateConfetti = () => {
     ctx.restore()
   }
 
-  if (particles.length > 0) {
+  if (stage.value === 'celebration' || particles.length > 0) {
     animationFrameId = window.requestAnimationFrame(animateConfetti)
   }
 }
@@ -877,12 +955,15 @@ const startCelebration = () => {
   stage.value = 'celebration'
   void playTrumpetFanfare()
   resizeCanvas()
+  ambientConfettiActive = true
+  lastAmbientSpawnAt = performance.now()
   spawnParticles()
   animateConfetti()
-
-  cleanupTimerId = window.setTimeout(() => {
-    stopConfetti()
-  }, 3600)
+  gameImageIndex.value = 0
+  stopImageCarousel()
+  imageCarouselTimer = window.setInterval(() => {
+    gameImageIndex.value = (gameImageIndex.value + 1) % gameImages.length
+  }, 1500)
 }
 
 onMounted(() => {
@@ -897,6 +978,7 @@ onBeforeUnmount(() => {
   stopRpsTimers()
   stopRpsFlashTimer()
   stopTttDefeatModalTimer()
+  stopImageCarousel()
   stopConfetti()
   window.removeEventListener('resize', resizeCanvas)
   if (audioContext) {
@@ -921,15 +1003,19 @@ onBeforeUnmount(() => {
         <span class="cursor" aria-hidden="true">|</span>
       </p>
 
-      <button
-        v-if="isTypingDone"
-        class="proceed-button"
-        type="button"
-        @click="openGamesStage"
-        @touchstart.passive="openGamesStage"
-      >
-        Weiter
-      </button>
+      <div class="typing-action-slot" aria-hidden="false">
+        <button
+          class="proceed-button typing-proceed"
+          :class="{ 'typing-proceed-visible': isTypingDone }"
+          type="button"
+          :disabled="!isTypingDone"
+          :aria-hidden="!isTypingDone"
+          @click="openGamesStage"
+          @touchstart.passive="openGamesStage"
+        >
+          Weiter
+        </button>
+      </div>
     </section>
 
     <section v-else-if="stage === 'game'" class="game-stage" aria-label="Mini-Spiel-Herausforderung">
@@ -1037,6 +1123,7 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="cake-stage" aria-label="Geburtstagskuchen Feier">
+      <h2 class="celebration-name">Jana</h2>
       <svg
         class="cake-svg"
         viewBox="0 0 420 420"
@@ -1067,10 +1154,33 @@ onBeforeUnmount(() => {
           stroke-linecap="round"
         />
 
+        <text
+          x="210"
+          y="248"
+          text-anchor="middle"
+          font-size="64"
+          font-weight="800"
+          fill="#ffffff"
+          font-family="'Avenir Next', 'Segoe UI', sans-serif"
+        >
+          27
+        </text>
+
         <rect x="199" y="92" width="22" height="48" rx="10" fill="#ffe66d" />
         <path d="M210 56 C194 74 196 90 210 96 C224 90 226 74 210 56" fill="#ff8a00" />
         <path d="M210 66 C201 78 202 87 210 91 C218 87 219 78 210 66" fill="#fff06a" />
       </svg>
+
+      <p class="voucher-text">Gutschein für ein Brettspiel deiner Wahl, kuratiert von Tim :)</p>
+
+      <div class="game-carousel">
+        <img
+          :key="gameImageIndex"
+          :src="gameImages[gameImageIndex]"
+          class="carousel-img"
+          alt="Brettspiel"
+        />
+      </div>
     </section>
 
     <div v-if="showTttDefeatModal" class="modal-backdrop" role="dialog" aria-modal="true">
@@ -1127,6 +1237,28 @@ onBeforeUnmount(() => {
 .cursor {
   margin-left: 2px;
   animation: blink 0.8s steps(1) infinite;
+}
+
+.typing-action-slot {
+  margin-top: 30px;
+  min-height: 56px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.typing-proceed {
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+  pointer-events: none;
+  transition: opacity 0.45s ease, transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.typing-proceed-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
 }
 
 .proceed-button,
@@ -1492,6 +1624,18 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0 0 36px rgba(255, 161, 208, 0.45));
 }
 
+.celebration-name {
+  margin: 0;
+  font-size: clamp(2.2rem, 5.8vw, 4.2rem);
+  font-family: 'Brush Script MT', 'Snell Roundhand', 'Segoe Script', cursive;
+  letter-spacing: 0.03em;
+  color: #ffe7ff;
+  text-shadow:
+    0 0 8px rgba(255, 140, 223, 0.9),
+    0 0 20px rgba(162, 102, 255, 0.75),
+    0 0 40px rgba(77, 227, 255, 0.45);
+}
+
 @keyframes blink {
   0%,
   49% {
@@ -1642,6 +1786,50 @@ onBeforeUnmount(() => {
 @media (max-width: 640px) {
   .gift-screen {
     padding: 18px;
+  }
+}
+
+.voucher-text {
+  margin-bottom: 20px;
+  text-align: center;
+  font-size: clamp(1rem, 1.8vw, 1.25rem);
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.02em;
+  max-width: 34ch;
+  line-height: 1.5;
+}
+
+.game-carousel {
+  width: min(160px, 44vw);
+  aspect-ratio: 1 / 1;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.carousel-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: carousel-flip-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes carousel-flip-in {
+  0% {
+    opacity: 0;
+    transform: perspective(700px) rotateY(-80deg) scale(0.88);
+  }
+  65% {
+    opacity: 1;
+    transform: perspective(700px) rotateY(6deg) scale(1.03);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(700px) rotateY(0deg) scale(1);
   }
 }
 </style>
